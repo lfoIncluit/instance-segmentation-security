@@ -1,6 +1,9 @@
+from itertools import count
 import cv2
 import numpy as np
 import imutils
+import json
+import time
 from openvino.inference_engine import IECore
 
 TEST_PATH = "Images"
@@ -8,25 +11,31 @@ VIDEO_PATH = "Video/BlindspotFront.mp4"
 PAINT = True
 CONF = 0.4
 
-pColor = (0, 0, 255)
+redColor = (0, 0, 255)
+greenColor = (0, 255, 0)
 rectThinkness = 1
 alpha = 0.8
 
 instance_segmentation_model_xml = "./model/instance-segmentation-security-1040.xml"
 instance_segmentation_model_bin = "./model/instance-segmentation-security-1040.bin"
 
-device = "CPU"
+device = "GPU"
 
 
 def drawText(frame, scale, rectX, rectY, rectColor, text):
 
-    textSize, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 3)
+    textSize, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 6)
 
     top = max(rectY - rectThinkness, textSize[0])
 
     cv2.putText(
-        frame, text, (rectX, top), cv2.FONT_HERSHEY_SIMPLEX, scale, rectColor, 3
+        frame, text, (rectX, top), cv2.FONT_HERSHEY_SIMPLEX, scale, rectColor, 1
     )
+
+
+def get_label(index):
+    global labels
+    return labels.get("coco_list")[index]
 
 
 def instance_segmentationDetection(
@@ -34,6 +43,7 @@ def instance_segmentationDetection(
     instance_segmentation_neural_net,
     instance_segmentation_execution_net,
     instance_segmentation_input_blob,
+    fps,
 ):
 
     N, C, H, W = instance_segmentation_neural_net.input_info[
@@ -54,7 +64,7 @@ def instance_segmentationDetection(
     boxes = instance_segmentation_results.get("boxes")
     # masks = instance_segmentation_results.get("masks")
 
-    print("LABELS: ", labels)
+    # print("LABELS: ", labels)
     for i in range(len(labels)):
         if int(labels[i]):
             conf = boxes[i][4]
@@ -71,26 +81,46 @@ def instance_segmentationDetection(
             resized_frame,
             (top_left_x, top_left_y),
             (botton_right_x, botton_right_y),
-            pColor,
+            redColor,
             rectThinkness,
         )
         rectW = botton_right_x - top_left_x
+        label = get_label(classId)
         drawText(
             resized_frame,
-            rectW * 0.008,
+            rectW * 0.02,
             botton_right_x,
             botton_right_y,
-            pColor,
-            str(classId),
+            redColor,
+            label,
         )
-
     showImg = cv2.resize(resized_frame, (800, 600))
+    drawText(
+        showImg,
+        1,
+        0,
+        0,
+        greenColor,
+        f"FPS : {str(fps)}",
+    )
     cv2.imshow("showImg", showImg)
 
 
 def main():
 
     ie = IECore()
+    labels_file_name = "objects_labels.json"
+    labels_file = None
+    fps = 0
+    frame_count = 0
+    global labels
+    try:
+        with open(labels_file_name, "r") as labels_file:
+            labels = json.loads(labels_file.read())
+
+    finally:
+        if labels_file:
+            labels_file.close()
 
     instance_segmentation_neural_net = ie.read_network(
         model=instance_segmentation_model_xml, weights=instance_segmentation_model_bin
@@ -106,14 +136,22 @@ def main():
 
         vidcap = cv2.VideoCapture(VIDEO_PATH)
         success, img = vidcap.read()
-
+        timestamp = time.time()
         while success:
             instance_segmentationDetection(
                 img,
                 instance_segmentation_neural_net,
                 instance_segmentation_execution_net,
                 instance_segmentation_input_blob,
+                fps,
             )
+            new_timestamp = time.time()
+            if new_timestamp - timestamp >= 1:
+                fps = frame_count
+                frame_count = 0
+                timestamp = new_timestamp
+            else:
+                frame_count += 1
             if cv2.waitKey(10) == 27:  # exit if Escape is hit
                 break
             success, img = vidcap.read()
